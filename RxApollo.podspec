@@ -16,7 +16,7 @@ Pod::Spec.new do |s|
   s.ios.deployment_target = '9.0'
   s.source_files = 'RxApollo/*.swift'
 
-  s.dependency 'Apollo', '~> 0.7.0'
-  s.dependency 'RxSwift', '~> 4.0'
+  s.dependency 'Apollo', '~> 0.10.1'
+  s.dependency 'RxSwift', '~> 4.5.0'
 
 end

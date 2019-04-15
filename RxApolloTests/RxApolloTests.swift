@@ -14,174 +14,170 @@ import RxBlocking
 
 class RxApolloTests: XCTestCase {
 
-    let disposeBag = DisposeBag()
+  let disposeBag = DisposeBag()
 
-    // MARK: - Fetch
+  // MARK: - Fetch
 
-    func testSuccessfulFetch() throws {
-        let query = HeroNameQuery()
+  func testSuccessfulFetch() throws {
+    let query = HeroNameQuery()
 
-        let networkTransport = MockNetworkTransport(body: [
-            "data": [
-                "hero": [
-                    "name": "Luke Skywalker",
-                    "__typename": "Human"
-                ]
-            ]
-        ])
+    let networkTransport = MockNetworkTransport(body: [
+      "data": [
+        "hero": [
+          "name": "Luke Skywalker",
+          "__typename": "Human"
+        ]
+      ]
+      ])
 
-        let client = ApolloClient(networkTransport: networkTransport, store: store(initialRecords: nil))
-        let result = try client.rx.fetch(query: query).toBlocking().single()
+    let client = ApolloClient(networkTransport: networkTransport, store: store(initialRecords: nil))
+    let result = try client.rx.fetch(query: query).toBlocking().single()
 
-        XCTAssertEqual(result?.hero?.name, "Luke Skywalker")
+    XCTAssertEqual(result.hero?.name, "Luke Skywalker")
+  }
+
+  func testUnsuccessfulFetch() {
+    let query = HeroNameQuery()
+
+    let networkTransport = MockNetworkTransport(body: [
+      "data": [
+        "hero": [
+          "__typename": "Human"
+        ]
+      ]
+      ])
+
+    let client = ApolloClient(networkTransport: networkTransport, store: store(initialRecords: nil))
+
+    do {
+      _ = try client.rx.fetch(query: query).toBlocking().single()
+    } catch _ as GraphQLResultError {
+      return
+    } catch {
+      XCTFail("Shouldn't get here")
     }
 
-    func testUnsuccessfulFetch() {
-        let query = HeroNameQuery()
+    XCTFail("Shouldn't get here")
+  }
 
-        let networkTransport = MockNetworkTransport(body: [
-            "data": [
-                "hero": [
-                    "__typename": "Human"
-                ]
-            ]
-        ])
+  // MARK: - Watch
 
-        let client = ApolloClient(networkTransport: networkTransport, store: store(initialRecords: nil))
+  func testWatchedQueryGetsUpdatedWithResultFromOtherQuery() throws {
+    let testStore = store(initialRecords: [
+      "QUERY_ROOT": ["hero": Reference(key: "QUERY_ROOT.hero")],
+      "QUERY_ROOT.hero": [
+        "name": "R2-D2",
+        "__typename": "Droid",
+        "friends": [
+          Reference(key: "QUERY_ROOT.hero.friends.0"),
+          Reference(key: "QUERY_ROOT.hero.friends.1"),
+          Reference(key: "QUERY_ROOT.hero.friends.2")
+        ]
+      ],
+      "QUERY_ROOT.hero.friends.0": ["__typename": "Human", "name": "Luke Skywalker"],
+      "QUERY_ROOT.hero.friends.1": ["__typename": "Human", "name": "Han Solo"],
+      "QUERY_ROOT.hero.friends.2": ["__typename": "Human", "name": "Leia Organa"]
+      ])
 
-        do {
-            _ = try client.rx.fetch(query: query).toBlocking().single()
-        } catch _ as GraphQLResultError {
-            return
-        } catch {
-            // Shouldn't get here
-            XCTFail()
-        }
+    let networkTransport = MockNetworkTransport(body: [
+      "data": [
+        "hero": [
+          "name": "Artoo",
+          "__typename": "Droid"
+        ]
+      ]
+      ])
 
-        // Shouldn't get here
-        XCTFail()
+    let client = ApolloClient(networkTransport: networkTransport, store: testStore)
+    let watched = client.rx.watch(query: HeroAndFriendsNamesQuery()).replayAll()
+
+    _ = watched.connect()
+
+    delay(dueTime: 0.1) {
+      client.fetch(query: HeroNameQuery(), cachePolicy: .fetchIgnoringCacheData)
     }
 
-    // MARK: - Watch
+    let results = try watched.take(2).timeout(5, scheduler: MainScheduler.instance).toBlocking().toArray()
 
-    func testWatchedQueryGetsUpdatedWithResultFromOtherQuery() throws {
-        let testStore = store(initialRecords: [
-            "QUERY_ROOT": ["hero": Reference(key: "QUERY_ROOT.hero")],
-            "QUERY_ROOT.hero": [
-                "name": "R2-D2",
-                "__typename": "Droid",
-                "friends": [
-                    Reference(key: "QUERY_ROOT.hero.friends.0"),
-                    Reference(key: "QUERY_ROOT.hero.friends.1"),
-                    Reference(key: "QUERY_ROOT.hero.friends.2")
-                ]
-            ],
-            "QUERY_ROOT.hero.friends.0": ["__typename": "Human", "name": "Luke Skywalker"],
-            "QUERY_ROOT.hero.friends.1": ["__typename": "Human", "name": "Han Solo"],
-            "QUERY_ROOT.hero.friends.2": ["__typename": "Human", "name": "Leia Organa"]
-        ])
+    let expectedFriendsNames = ["Luke Skywalker", "Han Solo", "Leia Organa"]
 
-        let networkTransport = MockNetworkTransport(body: [
-            "data": [
-                "hero": [
-                    "name": "Artoo",
-                    "__typename": "Droid"
-                ]
-            ]
-        ])
+    let firstHeroName = results[0].hero?.name
+    let firstFriendsNames = results[0].hero?.friends?.map { $0?.name }.compactMap { $0 } ?? []
 
-        let client = ApolloClient(networkTransport: networkTransport, store: testStore)
-        let watched = client.rx.watch(query: HeroAndFriendsNamesQuery()).replayAll()
+    XCTAssertEqual(firstHeroName, "R2-D2")
+    XCTAssertEqual(firstFriendsNames, expectedFriendsNames)
 
-        _ = watched.connect()
+    let secondHeroName = results[1].hero?.name
+    let secondFriendsNames = results[1].hero?.friends?.map { $0?.name }.compactMap { $0 } ?? []
 
-        delay(dueTime: 0.1) {
-            client.fetch(query: HeroNameQuery(), cachePolicy: .fetchIgnoringCacheData)
-        }
+    XCTAssertEqual(secondHeroName, "Artoo")
+    XCTAssertEqual(secondFriendsNames, expectedFriendsNames)
+  }
 
-        let results = try watched.take(2).timeout(5, scheduler: MainScheduler.instance).toBlocking().toArray()
+  // MARK: - Perform
 
-        let expectedFriendsNames = ["Luke Skywalker", "Han Solo", "Leia Organa"]
+  func testSuccessfulPerform() throws {
+    let mutation = CreateAwesomeReviewMutation()
 
-        let firstHeroName = results[0].hero?.name
-        let firstFriendsNames = results[0].hero?.friends?.map { $0?.name }.flatMap { $0 } ?? []
+    let networkTransport = MockNetworkTransport(body: [
+      "data": [
+        "createReview": [
+          "stars": 10,
+          "commentary": "This is awesome!",
+          "__typename": "CreateReview"
+        ]
+      ]
+      ])
 
-        XCTAssertEqual(firstHeroName, "R2-D2")
-        XCTAssertEqual(firstFriendsNames, expectedFriendsNames)
+    let client = ApolloClient(networkTransport: networkTransport, store: store(initialRecords: nil))
+    let result = try client.rx.perform(mutation: mutation).toBlocking().single()
 
-        let secondHeroName = results[1].hero?.name
-        let secondFriendsNames = results[1].hero?.friends?.map { $0?.name }.flatMap { $0 } ?? []
+    XCTAssertEqual(result.createReview?.stars, 10)
+    XCTAssertEqual(result.createReview?.commentary, "This is awesome!")
+  }
 
-        XCTAssertEqual(secondHeroName, "Artoo")
-        XCTAssertEqual(secondFriendsNames, expectedFriendsNames)
+  func testUnsuccessfulPerform() {
+    let mutation = CreateAwesomeReviewMutation()
+
+    let networkTransport = MockNetworkTransport(body: [
+      "data": [
+        "createReview": [
+          "commentary": "This is awesome!",
+          "__typename": "CreateReview"
+        ]
+      ]
+      ])
+
+    let client = ApolloClient(networkTransport: networkTransport, store: store(initialRecords: nil))
+
+    do {
+      _ = try client.rx.perform(mutation: mutation).toBlocking().single()
+    } catch _ as GraphQLResultError {
+      return
+    } catch {
+      XCTFail("Shouldn't get here")
     }
 
-    // MARK: - Perform
+    XCTFail("Shouldn't get here")
+  }
 
-    func testSuccessfulPerform() throws {
-        let mutation = CreateAwesomeReviewMutation()
+  // MARK: - Helpers
 
-        let networkTransport = MockNetworkTransport(body: [
-            "data": [
-                "createReview": [
-                    "stars": 10,
-                    "commentary": "This is awesome!",
-                    "__typename": "CreateReview"
-                ]
-            ]
-        ])
+  private func store(initialRecords: RecordSet?) -> ApolloStore {
+    var cache: InMemoryNormalizedCache
 
-        let client = ApolloClient(networkTransport: networkTransport, store: store(initialRecords: nil))
-        let result = try client.rx.perform(mutation: mutation).toBlocking().single()
-
-        XCTAssertEqual(result?.createReview?.stars, 10)
-        XCTAssertEqual(result?.createReview?.commentary, "This is awesome!")
+    if let initialRecords = initialRecords {
+      cache = InMemoryNormalizedCache(records: initialRecords)
+    } else {
+      cache = InMemoryNormalizedCache()
     }
 
-    func testUnsuccessfulPerform() {
-        let mutation = CreateAwesomeReviewMutation()
+    return ApolloStore(cache: cache)
+  }
 
-        let networkTransport = MockNetworkTransport(body: [
-            "data": [
-                "createReview": [
-                    "commentary": "This is awesome!",
-                    "__typename": "CreateReview"
-                ]
-            ]
-            ])
-
-        let client = ApolloClient(networkTransport: networkTransport, store: store(initialRecords: nil))
-
-        do {
-            _ = try client.rx.perform(mutation: mutation).toBlocking().single()
-        } catch _ as GraphQLResultError {
-            return
-        } catch {
-            // Shouldn't get here
-            XCTFail()
-        }
-
-        // Shouldn't get here
-        XCTFail()
-    }
-
-    // MARK: - Helpers
-
-    private func store(initialRecords: RecordSet?) -> ApolloStore {
-        var cache: InMemoryNormalizedCache
-
-        if let initialRecords = initialRecords {
-            cache = InMemoryNormalizedCache(records: initialRecords)
-        } else {
-            cache = InMemoryNormalizedCache()
-        }
-
-        return ApolloStore(cache: cache)
-    }
-
-    private func delay(dueTime: RxTimeInterval, closure: @escaping () -> Void) {
-        Observable<Void>.empty().delay(dueTime, scheduler: MainScheduler.instance)
-            .subscribe(onCompleted: closure)
-            .disposed(by: disposeBag)
-    }
+  private func delay(dueTime: RxTimeInterval, closure: @escaping () -> Void) {
+    Observable<Void>.empty().delay(dueTime, scheduler: MainScheduler.instance)
+      .subscribe(onCompleted: closure)
+      .disposed(by: disposeBag)
+  }
 }
