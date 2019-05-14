@@ -1,2 +1,2 @@
 github "apollostack/apollo-ios" ~> 0.10.1
-github "ReactiveX/RxSwift" ~> 4.5.0
+github "ReactiveX/RxSwift" ~> 5.0
